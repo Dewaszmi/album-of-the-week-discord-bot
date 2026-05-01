@@ -137,9 +137,9 @@ class AlbumBot(commands.Bot):
             )
 
             message_content = (
-                "<@503275690137878548>\n"
+                f"<@{AOTW_ROLE_ID}>\n"
                 f"{prefix} #{current_count}\n"
-                f"**{entry['artist']} - {entry['title']}**\n"
+                f"{entry['artist']} - {entry['title']}\n"
                 f"PROPOZYCJA: {f"<@{entry['user_id']}>"}\n"
                 f"{entry['image']}"
             )

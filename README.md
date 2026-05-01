@@ -1,0 +1,1 @@
+# Discord bot to automate Album of The Week events
