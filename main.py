@@ -27,21 +27,42 @@ class AlbumBot(commands.Bot):
     async def on_ready(self):
         print(f"{self.user} is online.")
 
-    async def fetch_album_data(self, artist, album_name):
-        url = "http://ws.audioscrobbler.com/2.0/"
-        params = {
-            "method": "album.getInfo",
+    async def fetch_fuzzy_album(self, query):
+        """Searches Last.fm for the best match and returns full album info."""
+        search_url = "http://ws.audioscrobbler.com/2.0/"
+        search_params = {
+            "method": "album.search",
+            "album": query,
             "api_key": LASTFM_API_KEY,
-            "artist": artist,
-            "album": album_name,
             "format": "json",
+            "limit": 1,
         }
+
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, params=params) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    return data.get("album")
-                return None
+            # Search last.fm for the album
+            async with session.get(search_url, params=search_params) as resp:
+                data = await resp.json()
+                results = data.get("results", {}).get("albummatches", {}).get("album", [])
+
+                if not results:
+                    return None
+
+                # Get the top match's name and artist
+                best_match = results[0]
+                artist_name = best_match["artist"]
+                album_name = best_match["name"]
+
+            # Get full info (including high-res images) for that specific match
+            info_params = {
+                "method": "album.getInfo",
+                "api_key": LASTFM_API_KEY,
+                "artist": artist_name,
+                "album": album_name,
+                "format": "json",
+            }
+            async with session.get(search_url, params=info_params) as resp:
+                full_data = await resp.json()
+                return full_data.get("album")
 
     @tasks.loop(time=datetime.time(hour=10, minute=0))
     async def weekly_post(self):
@@ -72,14 +93,16 @@ async def album(ctx):
 
 
 @album.command(name="add")
-async def add_album(ctx, artist: str, title: str):
-    """Usage: !album add \"FKA Twigs\" \"LP1\" """
+async def add_album(ctx, *, query: str):
+    """Fuzzy search: !album add after hours weekend"""
     async with ctx.typing():
-        album_data = await bot.fetch_album_data(artist, title)
+        album_data = await bot.fetch_fuzzy_album(query)
 
-        if album_data and "image" in album_data:
-            # Last.fm returns images in a list; index 3 is usually 'extralarge'
-            image_url = album_data["image"][3]["#text"]
+        if album_data:
+            # Last.fm image sizes: small, medium, large, extralarge
+            # We try to get 'extralarge' (index 3)
+            images = album_data.get("image", [])
+            image_url = images[3]["#text"] if len(images) > 3 else ""
 
             bot.queue.append(
                 {
@@ -87,11 +110,21 @@ async def add_album(ctx, artist: str, title: str):
                     "title": album_data["name"],
                     "image": image_url,
                     "user": ctx.author.display_name,
+                    "url": album_data.get("url", ""),
                 }
             )
-            await ctx.send(f"✅ Added **{album_data['name']}** by **{album_data['artist']}** to the queue!")
+
+            # Confirmation embed (like fmbot)
+            embed = discord.Embed(
+                title="Added to Queue",
+                description=f"**{album_data['name']}** by **{album_data['artist']}**",
+                color=0x00FF00,
+            )
+            if image_url:
+                embed.set_thumbnail(url=image_url)
+            await ctx.send(embed=embed)
         else:
-            await ctx.send("❌ Could not find that album. Make sure to use quotes for names with spaces!")
+            await ctx.send(f"❌ Could not find any albums matching `{query}`")
 
 
 @album.command(name="queue")
