@@ -57,14 +57,14 @@ class AlbumBot(commands.Bot):
             name = thread.name.lower()
             if is_bonus and "bonus" in name:
                 count += 1
-            elif not is_bonus and "aotw #" in name and "bonus" not in name:
+            elif not is_bonus and "album of the week" in name and "bonus" not in name:
                 count += 1
 
         for thread in channel.threads:
             name = thread.name.lower()
             if is_bonus and "bonus" in name:
                 count += 1
-            elif not is_bonus and "aotw" in name and "bonus" not in name:
+            elif not is_bonus and "album of the week" in name and "bonus" not in name:
                 count += 1
         return count
 
@@ -72,7 +72,31 @@ class AlbumBot(commands.Bot):
         self.weekly_post.start()
 
     async def on_ready(self):
-        print(f"{self.user} is online.")
+        # Print online status and which guild/role/channel the bot will use
+        guild = self.get_guild(GUILD_ID)
+        guild_name = guild.name if guild else "Unknown"
+
+        # Prepare role display (try to resolve a role name if possible)
+        role_display = "None"
+        if AOTW_ROLE_ID:
+            try:
+                role_id_int = int(AOTW_ROLE_ID)
+            except Exception:
+                role_id_int = None
+            if role_id_int:
+                role_obj = guild.get_role(role_id_int) if guild else None
+                if role_obj:
+                    role_display = f"{role_obj.name} (<@&{role_id_int}>)"
+                else:
+                    role_display = f"<@&{role_id_int}>"
+
+        # Resolve target channel name
+        channel = self.get_channel(TARGET_CHANNEL_ID)
+        channel_name = channel.name if channel else "Unknown"
+
+        print(
+            f"{self.user} is online. Connected to guild: {guild_name}; Ping role: {role_display}; Target channel: {channel_name}"
+        )
 
     async def fetch_fuzzy_album(self, query):
         """Searches Last.fm for the best match and returns full album info."""
@@ -180,15 +204,22 @@ class AlbumBot(commands.Bot):
             user_mention = f"<@{entry['user_id']}>"
             image_url = entry.get("image", "")
 
+            # Use role mention format for roles (<@&id>) so it pings correctly
+            role_mention = f"<@&{AOTW_ROLE_ID}>" if AOTW_ROLE_ID else ""
             message_content = (
-                f"<@{AOTW_ROLE_ID}>\n"
+                f"{role_mention}\n"
                 f"{prefix} #{current_count}\n"
                 f"{entry['artist']} - {entry['title']}\n"
                 f"PROPOZYCJA: {user_mention}\n"
-                f"{image_url}"
             )
 
-            await thread.send(content=f"{message_content}")
+            # Send the message; include image in an embed if available
+            if image_url:
+                embed = discord.Embed()
+                embed.set_image(url=image_url)
+                await thread.send(content=message_content, embed=embed)
+            else:
+                await thread.send(content=message_content)
 
             return entry["title"]
         return "Channel not found."
@@ -217,29 +248,50 @@ async def bonus(ctx):
 
 
 # Add album to queue (interactive search + selection)
-async def add_album(ctx, queue, query: str):
+async def add_album(ctx, queue, query: str, suggested_by=None):
     async with ctx.typing():
         results = await bot.search_albums(query)
 
         if not results:
             return await ctx.send("❌ Not found.")
 
-        # If there's only one candidate, select it automatically
-        if len(results) == 1:
-            choice = results[0]
+        # Deduplicate results by artist + album title so we don't show repeated entries
+        unique_results = []
+        seen = set()
+        for r in results:
+            name = (r.get("name") or r.get("title") or "").strip()
+            artist = (r.get("artist") or "").strip()
+            key = (artist.lower(), name.lower())
+            if key not in seen:
+                seen.add(key)
+                unique_results.append(r)
+
+        if not unique_results:
+            return await ctx.send("❌ Not found.")
+
+        # If there's only one unique candidate, select it automatically
+        if len(unique_results) == 1:
+            choice = unique_results[0]
         else:
-            # Build a prompt listing top results
-            lines = []
-            for i, r in enumerate(results, start=1):
+            # Build embeds listing unique top results with thumbnails
+            embeds = []
+            for i, r in enumerate(unique_results, start=1):
                 name = r.get("name") or r.get("title")
                 artist = r.get("artist")
-                lines.append(f"{i}. {artist} - {name}")
+                images = r.get("image", []) if isinstance(r, dict) else []
+                img_url = ""
+                for image in reversed(images):
+                    if image.get("#text"):
+                        img_url = image["#text"]
+                        break
 
-            prompt = "Please choose an album by number (1-{n}) or type 'cancel' within 30 seconds:\n".format(
-                n=len(results)
-            ) + "\n".join(lines)
+                embed = discord.Embed(title=f"{i}. {artist} - {name}", color=0xE74C3C)
+                if img_url:
+                    embed.set_thumbnail(url=img_url)
+                embeds.append(embed)
 
-            await ctx.send(prompt)
+            prompt = f"Please choose an album by number (1-{len(unique_results)}) or type 'cancel' within 30 seconds."
+            await ctx.send(prompt, embeds=embeds)
 
             def check(m):
                 return (
@@ -247,7 +299,7 @@ async def add_album(ctx, queue, query: str):
                     and m.channel == ctx.channel
                     and (
                         m.content.lower() == "cancel"
-                        or (m.content.isdigit() and 1 <= int(m.content) <= len(results))
+                        or (m.content.isdigit() and 1 <= int(m.content) <= len(unique_results))
                     )
                 )
 
@@ -260,7 +312,7 @@ async def add_album(ctx, queue, query: str):
                 return await ctx.send("Cancelled.")
 
             idx = int(reply.content) - 1
-            choice = results[idx]
+            choice = unique_results[idx]
 
         # Fetch full album info (higher-res images, canonical names)
         album_info = await bot.get_album_info(choice.get("artist"), choice.get("name"))
@@ -276,17 +328,31 @@ async def add_album(ctx, queue, query: str):
         artist_name = data.get("artist") or choice.get("artist")
         album_name = data.get("name") or choice.get("name")
 
+        # Use suggested_by if provided, otherwise default to command author
+        user_name = suggested_by.display_name if suggested_by else ctx.author.display_name
+        user_id = suggested_by.id if suggested_by else ctx.author.id
+
         queue.append(
             {
                 "artist": artist_name,
                 "title": album_name,
                 "image": img,
-                "user_name": ctx.author.display_name,
-                "user_id": ctx.author.id,
+                "user_name": user_name,
+                "user_id": user_id,
             }
         )
         bot.save_queues()
-        await ctx.send(f"✅ Added **{artist_name} - {album_name}** to queue.")
+
+        # Confirmation embed with album cover
+        confirm_embed = discord.Embed(
+            title=f"{artist_name} - {album_name}",
+            description=f"Added to queue.\nSuggested by: {user_name}",
+            color=0x2ECC71,
+        )
+        if img:
+            confirm_embed.set_thumbnail(url=img)
+
+        await ctx.send(content="✅ Added to queue:", embed=confirm_embed)
 
 
 # Show selected queue
@@ -338,8 +404,21 @@ async def pop_queue(ctx, queue):
 # Helper to create analogous commands for standard and bonus queues
 def register_queue_commands(group, queue):
     @group.command(name="add")
-    async def _add(ctx, *, query):
-        await add_album(ctx, queue, query)
+    async def _add(ctx, *, args):
+        # Allow optionally specifying the suggester by mentioning them.
+        # If a mention is present, use the first mentioned member as `suggested_by`
+        suggested_by = None
+        raw = args.strip()
+        if ctx.message.mentions:
+            suggested_by = ctx.message.mentions[0]
+            for m in ctx.message.mentions:
+                raw = raw.replace(m.mention, "")
+            raw = raw.strip()
+
+        if not raw:
+            return await ctx.send("❌ Please provide an album to add.")
+
+        await add_album(ctx, queue, raw, suggested_by=suggested_by)
 
     @group.command(name="queue")
     async def _list(ctx):
@@ -352,7 +431,7 @@ def register_queue_commands(group, queue):
     @group.command(name="pop")
     @commands.is_owner()
     async def _pop(ctx):
-        await pop_queue(queue)
+        await pop_queue(ctx, queue)
 
 
 register_queue_commands(album, bot.main_queue)
