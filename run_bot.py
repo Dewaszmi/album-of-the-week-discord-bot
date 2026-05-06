@@ -180,12 +180,15 @@ class AlbumBot(commands.Bot):
                 type=discord.ChannelType.public_thread,
             )
 
+            user_mention = f"<@{entry['user_id']}>"
+            image_url = entry.get("image", "")
+
             message_content = (
                 f"<@{AOTW_ROLE_ID}>\n"
                 f"{prefix} #{current_count}\n"
                 f"{entry['artist']} - {entry['title']}\n"
-                f"PROPOZYCJA: {f"<@{entry['user_id']}>"}\n"
-                f"{entry['image']}"
+                f"PROPOZYCJA: {user_mention}\n"
+                f"{image_url}"
             )
 
             await thread.send(content=f"{message_content}")
