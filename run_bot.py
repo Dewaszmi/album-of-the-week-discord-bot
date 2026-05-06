@@ -1,7 +1,9 @@
-import os
-import json
-import random
 import datetime
+import json
+import os
+import random
+import asyncio
+
 import aiohttp
 import discord
 from discord.ext import commands, tasks
@@ -20,6 +22,8 @@ intents = discord.Intents.default()
 intents.message_content = True
 
 DATA_DIR = "data"
+if not os.path.exists(DATA_DIR):
+    os.makedirs(DATA_DIR)
 QUEUE_FILE = f"{DATA_DIR}/queue.json"
 QUOTES_FILE = f"{DATA_DIR}/quotes.json"
 
@@ -30,12 +34,18 @@ class AlbumBot(commands.Bot):
         data = self.load_data(QUEUE_FILE, {"main": [], "bonus": []})
         self.main_queue = data.get("main", [])
         self.bonus_queue = data.get("bonus", [])
-        # self.quotes = self.load_data(QUOTES_FILE, ["no quotes"])
 
-    def load_data(self, filename, default_val):
+    def load_data(self, filename, default_val={}):
         if os.path.exists(filename):
-            with open(filename, "r") as f:
-                return json.load(f)
+            try:
+                if os.path.getsize(filename) == 0:
+                    return default_val
+
+                with open(filename, "r") as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, IOError) as e:
+                print(f"⚠️ Warning: Could not parse {filename}. Resetting to default. Error: {e}")
+                return default_val
         return default_val
 
     def save_queues(self):
@@ -117,11 +127,44 @@ class AlbumBot(commands.Bot):
                 album_data = full_data.get("album")
                 return album_data if album_data else results[0]
 
+    async def search_albums(self, query, limit=5):
+        """Search Last.fm and return a list of up to `limit` album matches."""
+        search_url = "http://ws.audioscrobbler.com/2.0/"
+        params = {
+            "method": "album.search",
+            "album": query,
+            "api_key": LASTFM_API_KEY,
+            "format": "json",
+            "limit": limit,
+        }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(search_url, params=params) as resp:
+                data = await resp.json()
+                results = data.get("results", {}).get("albummatches", {}).get("album", [])
+                return results
+
+    async def get_album_info(self, artist_name, album_name):
+        """Fetch full album info (including high-res images) for a given artist+album."""
+        search_url = "http://ws.audioscrobbler.com/2.0/"
+        params = {
+            "method": "album.getInfo",
+            "api_key": LASTFM_API_KEY,
+            "artist": artist_name,
+            "album": album_name,
+            "format": "json",
+        }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(search_url, params=params) as resp:
+                data = await resp.json()
+                return data.get("album")
+
     async def post_album(self, queue):
         if not queue:
             return None
 
-        is_bonus = queue == bot.bonus_queue
+        is_bonus = queue == self.bonus_queue
 
         entry = queue.pop(0)
         self.save_queues()
@@ -133,7 +176,8 @@ class AlbumBot(commands.Bot):
             current_count = await self.get_next_count(channel, is_bonus=is_bonus)
 
             thread = await channel.create_thread(
-                name=f"{prefix} #{current_count}", type=discord.ChannelType.public_thread
+                name=f"{prefix} #{current_count}",
+                type=discord.ChannelType.public_thread,
             )
 
             message_content = (
@@ -171,31 +215,91 @@ async def bonus(ctx):
     await ctx.send("`!bonus add`, `!bonus queue`")
 
 
-# Add album to queue
+# Add album to queue (interactive search + selection)
 async def add_album(ctx, queue, query: str):
     async with ctx.typing():
-        data = await bot.fetch_fuzzy_album(query)
-        if data:
-            images = data.get("image", [])
-            img = ""
-            # Loop backwards from 'extralarge' to 'small' to find the first non-empty URL
-            for image in reversed(images):
-                if image.get("#text"):
-                    img = image["#text"]
-                    break
-            queue.append(
-                {
-                    "artist": data["artist"],
-                    "title": data["name"],
-                    "image": img,
-                    "user_name": ctx.author.display_name,
-                    "user_id": ctx.author.id,
-                }
-            )
-            bot.save_queues()
-            await ctx.send(f"✅ Added **{data['name']}** to queue.")
+        results = await bot.search_albums(query)
+
+        if not results:
+            return await ctx.send("❌ Not found.")
+
+        # If there's only one candidate, select it automatically
+        if len(results) == 1:
+            choice = results[0]
         else:
-            await ctx.send("❌ Not found.")
+            # Build a prompt listing top results
+            lines = []
+            for i, r in enumerate(results, start=1):
+                name = r.get("name") or r.get("title")
+                artist = r.get("artist")
+                lines.append(f"{i}. {artist} - {name}")
+
+            prompt = "Please choose an album by number (1-{n}) or type 'cancel' within 30 seconds:\n".format(
+                n=len(results)
+            ) + "\n".join(lines)
+
+            await ctx.send(prompt)
+
+            def check(m):
+                return (
+                    m.author == ctx.author
+                    and m.channel == ctx.channel
+                    and (
+                        m.content.lower() == "cancel"
+                        or (m.content.isdigit() and 1 <= int(m.content) <= len(results))
+                    )
+                )
+
+            try:
+                reply = await bot.wait_for("message", timeout=30.0, check=check)
+            except asyncio.TimeoutError:
+                return await ctx.send("⏲️ Timed out. Please try again.")
+
+            if reply.content.lower() == "cancel":
+                return await ctx.send("Cancelled.")
+
+            idx = int(reply.content) - 1
+            choice = results[idx]
+
+        # Fetch full album info (higher-res images, canonical names)
+        album_info = await bot.get_album_info(choice.get("artist"), choice.get("name"))
+        data = album_info if album_info else choice
+
+        images = data.get("image", []) if isinstance(data, dict) else []
+        img = ""
+        for image in reversed(images):
+            if image.get("#text"):
+                img = image["#text"]
+                break
+
+        artist_name = data.get("artist") or choice.get("artist")
+        album_name = data.get("name") or choice.get("name")
+
+        queue.append(
+            {
+                "artist": artist_name,
+                "title": album_name,
+                "image": img,
+                "user_name": ctx.author.display_name,
+                "user_id": ctx.author.id,
+            }
+        )
+        bot.save_queues()
+        await ctx.send(f"✅ Added **{artist_name} - {album_name}** to queue.")
+
+
+# Remove album from queue by 1-based index
+async def remove_album(ctx, queue, index: int):
+    if index < 1:
+        return await ctx.send("❌ Index must be 1 or greater.")
+    if not queue:
+        return await ctx.send("❌ Queue is empty.")
+    if index > len(queue):
+        return await ctx.send(f"❌ Index out of range. There are {len(queue)} items.")
+
+    removed = queue.pop(index - 1)
+    bot.save_queues()
+    await ctx.send(f"✅ Removed **{removed.get('artist')} - {removed.get('title')}** from queue.")
 
 
 @album.command(name="add")
@@ -206,6 +310,16 @@ async def album_add(ctx, *, query: str):
 @bonus.command(name="add")
 async def bonus_add(ctx, *, query: str):
     await add_album(ctx, bot.bonus_queue, query)
+
+
+@album.command(name="remove")
+async def album_remove(ctx, index: int):
+    await remove_album(ctx, bot.main_queue, index)
+
+
+@bonus.command(name="remove")
+async def bonus_remove(ctx, index: int):
+    await remove_album(ctx, bot.bonus_queue, index)
 
 
 # Show selected queue
@@ -220,7 +334,7 @@ async def show_queue(ctx, queue):
     for i, item in enumerate(queue[:10], 1):
         embed.add_field(
             name=f"{i}. {item['title']}",
-            value=f"Artist: {item["artist"]}\nSubmitted by: {item['user_name']}",
+            value=f"Artist: {item['artist']}\nSubmitted by: {item['user_name']}",
             inline=False,
         )
 
