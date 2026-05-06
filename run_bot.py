@@ -1,15 +1,12 @@
 import datetime
 import json
 import os
-import random
 import asyncio
 
 import aiohttp
 import discord
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
-
-COUNT = int(5)
 
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
@@ -208,6 +205,7 @@ class AlbumBot(commands.Bot):
 bot = AlbumBot()
 
 
+# DISCORD COMMANDS
 @bot.group(name="album", invoke_without_command=True)
 async def album(ctx):
     await ctx.send("`!album add`, `!album queue`")
@@ -291,40 +289,6 @@ async def add_album(ctx, queue, query: str):
         await ctx.send(f"✅ Added **{artist_name} - {album_name}** to queue.")
 
 
-# Remove album from queue by 1-based index
-async def remove_album(ctx, queue, index: int):
-    if index < 1:
-        return await ctx.send("❌ Index must be 1 or greater.")
-    if not queue:
-        return await ctx.send("❌ Queue is empty.")
-    if index > len(queue):
-        return await ctx.send(f"❌ Index out of range. There are {len(queue)} items.")
-
-    removed = queue.pop(index - 1)
-    bot.save_queues()
-    await ctx.send(f"✅ Removed **{removed.get('artist')} - {removed.get('title')}** from queue.")
-
-
-@album.command(name="add")
-async def album_add(ctx, *, query: str):
-    await add_album(ctx, bot.main_queue, query)
-
-
-@bonus.command(name="add")
-async def bonus_add(ctx, *, query: str):
-    await add_album(ctx, bot.bonus_queue, query)
-
-
-@album.command(name="remove")
-async def album_remove(ctx, index: int):
-    await remove_album(ctx, bot.main_queue, index)
-
-
-@bonus.command(name="remove")
-async def bonus_remove(ctx, index: int):
-    await remove_album(ctx, bot.bonus_queue, index)
-
-
 # Show selected queue
 async def show_queue(ctx, queue):
     if not queue:
@@ -332,7 +296,7 @@ async def show_queue(ctx, queue):
     embed = discord.Embed(
         title="Upcoming Album Queue",
         description=f"There are **{len(queue)}** albums waiting.",
-        color=0xE74C3C,
+        color=0xE74C3C,  # lightish red
     )
     for i, item in enumerate(queue[:10], 1):
         embed.add_field(
@@ -348,35 +312,50 @@ async def show_queue(ctx, queue):
     await ctx.send(embed=embed)
 
 
-@album.command(name="queue")
-async def album_queue(ctx):
-    await show_queue(ctx, bot.main_queue)
+# Remove album from queue by 1-based index
+async def remove_album(ctx, queue, index: int):
+    if index < 1:
+        return await ctx.send("❌ Index must be 1 or greater.")
+    if not queue:
+        return await ctx.send("❌ Queue is empty.")
+    if index > len(queue):
+        return await ctx.send(f"❌ Index out of range. There are {len(queue)} items.")
 
-
-@bonus.command(name="queue")
-async def bonus_queue(ctx):
-    await show_queue(ctx, bot.bonus_queue)
+    removed = queue.pop(index - 1)
+    bot.save_queues()
+    await ctx.send(f"✅ Removed **{removed.get('artist')} - {removed.get('title')}** from queue.")
 
 
 # Manually pop queue (bot owner only)
-@commands.is_owner()
-async def pop_manual(ctx):
-    """Manually trigger the weekly post logic."""
-    result = await bot.post_album()
+async def pop_queue(ctx, queue):
+    result = await bot.post_album(queue)
     if result:
         await ctx.send(f"Manually triggered post for: **{result}**")
     else:
         await ctx.send("Queue is empty.")
 
 
-@album.command(name="pop")
-async def album_pop(ctx):
-    await bot.post_album(bot.main_queue)
+# Helper to create analogous commands for standard and bonus queues
+def register_queue_commands(group, queue):
+    @group.command(name="add")
+    async def _add(ctx, *, query):
+        await add_album(ctx, queue, query)
+
+    @group.command(name="queue")
+    async def _list(ctx):
+        await show_queue(ctx, queue)
+
+    @group.command(name="remove")
+    async def _remove(ctx, index: int):
+        await remove_album(ctx, queue, index)
+
+    @group.command(name="pop")
+    @commands.is_owner()
+    async def _pop(ctx):
+        await pop_queue(queue)
 
 
-@bonus.command(name="pop")
-async def bonus_pop(ctx):
-    await bot.post_album(bot.bonus_queue)
-
+register_queue_commands(album, bot.main_queue)
+register_queue_commands(bonus, bot.bonus_queue)
 
 bot.run(TOKEN)
