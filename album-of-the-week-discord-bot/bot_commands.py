@@ -63,83 +63,21 @@ def register_commands(bot):
             return await ctx.send("❌ Please provide an album to add.")
 
         async with ctx.typing():
-            results = await bot.search_albums(raw)
+            data = await bot.fetch_fuzzy_album(raw)
 
-            if not results:
+            if not data:
                 return await ctx.send("❌ Not found.")
 
-            # Deduplicate results by artist + album title so we don't show repeated entries
-            unique_results = []
-            seen = set()
-            for r in results:
-                name = (r.get("name") or r.get("title") or "").strip()
-                artist = (r.get("artist") or "").strip()
-                key = (artist.lower(), name.lower())
-                if key not in seen:
-                    seen.add(key)
-                    unique_results.append(r)
+            artist_name = data.get("artist")
+            album_name = data.get("name")
 
-            if not unique_results:
-                return await ctx.send("❌ Not found.")
-
-            # If there's only one unique candidate, select it automatically
-            if len(unique_results) == 1:
-                choice = unique_results[0]
-            else:
-                # Build embeds listing unique top results with thumbnails
-                embeds = []
-                for i, r in enumerate(unique_results, start=1):
-                    name = r.get("name") or r.get("title")
-                    artist = r.get("artist")
-                    images = r.get("image", []) if isinstance(r, dict) else []
-                    img_url = ""
-                    for image in reversed(images):
-                        if image.get("#text"):
-                            img_url = image["#text"]
-                            break
-
-                    embed = discord.Embed(title=f"{i}. {artist} - {name}", color=0xE74C3C)
-                    if img_url:
-                        embed.set_thumbnail(url=img_url)
-                    embeds.append(embed)
-
-                prompt = f"Please choose an album by number (1-{len(unique_results)}) or type 'cancel' within 30 seconds."
-                await ctx.send(prompt, embeds=embeds)
-
-                def check(m):
-                    return (
-                        m.author == ctx.author
-                        and m.channel == ctx.channel
-                        and (
-                            m.content.lower() == "cancel"
-                            or (m.content.isdigit() and 1 <= int(m.content) <= len(unique_results))
-                        )
-                    )
-
-                try:
-                    reply = await bot.wait_for("message", timeout=30.0, check=check)
-                except asyncio.TimeoutError:
-                    return await ctx.send("⏲️ Timed out. Please try again.")
-
-                if reply.content.lower() == "cancel":
-                    return await ctx.send("Cancelled.")
-
-                idx = int(reply.content) - 1
-                choice = unique_results[idx]
-
-            # Fetch full album info (higher-res images, canonical names)
-            album_info = await bot.get_album_info(choice.get("artist"), choice.get("name"))
-            data = album_info if album_info else choice
-
-            images = data.get("image", []) if isinstance(data, dict) else []
+            images = data.get("image", []) or []
             img = ""
+            # Loop backwards from 'extralarge' to 'small' to find the first non-empty URL
             for image in reversed(images):
                 if image.get("#text"):
                     img = image["#text"]
                     break
-
-            artist_name = data.get("artist") or choice.get("artist")
-            album_name = data.get("name") or choice.get("name")
 
             # Use suggested_by if provided, otherwise default to command author
             user_name = suggested_by.display_name if suggested_by else ctx.author.display_name

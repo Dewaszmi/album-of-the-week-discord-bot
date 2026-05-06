@@ -149,39 +149,6 @@ class AlbumBot(commands.Bot):
                 album_data = full_data.get("album")
                 return album_data if album_data else results[0]
 
-    async def search_albums(self, query, limit=5):
-        """Search Last.fm and return a list of up to `limit` album matches."""
-        search_url = "http://ws.audioscrobbler.com/2.0/"
-        params = {
-            "method": "album.search",
-            "album": query,
-            "api_key": LASTFM_API_KEY,
-            "format": "json",
-            "limit": limit,
-        }
-
-        async with aiohttp.ClientSession() as session:
-            async with session.get(search_url, params=params) as resp:
-                data = await resp.json()
-                results = data.get("results", {}).get("albummatches", {}).get("album", [])
-                return results
-
-    async def get_album_info(self, artist_name, album_name):
-        """Fetch full album info (including high-res images) for a given artist+album."""
-        search_url = "http://ws.audioscrobbler.com/2.0/"
-        params = {
-            "method": "album.getInfo",
-            "api_key": LASTFM_API_KEY,
-            "artist": artist_name,
-            "album": album_name,
-            "format": "json",
-        }
-
-        async with aiohttp.ClientSession() as session:
-            async with session.get(search_url, params=params) as resp:
-                data = await resp.json()
-                return data.get("album")
-
     async def post_album(self, queue):
         if not queue:
             return None
