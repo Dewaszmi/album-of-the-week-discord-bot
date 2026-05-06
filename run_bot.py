@@ -2,7 +2,6 @@ import os
 import sys
 from dotenv import load_dotenv
 
-# Ensure the package modules are importable (directory name contains hyphens)
 HERE = os.path.dirname(__file__)
 MODULE_PATH = os.path.join(HERE, "album-of-the-week-discord-bot")
 if MODULE_PATH not in sys.path:

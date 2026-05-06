@@ -225,7 +225,7 @@ class AlbumBot(commands.Bot):
             return entry["title"]
         return "Channel not found."
 
-    @tasks.loop(time=datetime.time(hour=18, minute=0))
+    @tasks.loop(time=datetime.time(hour=12, minute=0))
     async def weekly_post(self):
         current_day = datetime.datetime.now().weekday()
         if current_day == 2:  # Wednesday
