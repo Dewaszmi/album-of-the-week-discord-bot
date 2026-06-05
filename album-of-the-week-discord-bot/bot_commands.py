@@ -1,6 +1,32 @@
 import asyncio
+from urllib.parse import quote
+
 import discord
 from discord.ext import commands
+
+
+def _artist_name(artist):
+    if isinstance(artist, dict):
+        return artist.get("name", "")
+    return artist or ""
+
+
+def _album_lastfm_url(item):
+    if url := item.get("url"):
+        return url
+    artist = _artist_name(item.get("artist"))
+    album = item.get("title", "")
+    if artist and album:
+        return f"https://www.last.fm/music/{quote(artist, safe='')}/+/{quote(album, safe='')}"
+    return None
+
+
+def _album_title_link(item):
+    title = item.get("title", "Unknown")
+    url = _album_lastfm_url(item)
+    if url:
+        return f"[{title}]({url})"
+    return title
 
 
 def register_commands(bot):
@@ -68,8 +94,9 @@ def register_commands(bot):
             if not data:
                 return await ctx.send("❌ Not found.")
 
-            artist_name = data.get("artist")
+            artist_name = _artist_name(data.get("artist"))
             album_name = data.get("name")
+            album_url = data.get("url", "")
 
             images = data.get("image", []) or []
             img = ""
@@ -80,13 +107,16 @@ def register_commands(bot):
                     break
 
             # Use suggested_by if provided, otherwise default to command author
-            user_name = suggested_by.display_name if suggested_by else ctx.author.display_name
+            user_name = (
+                suggested_by.display_name if suggested_by else ctx.author.display_name
+            )
             user_id = suggested_by.id if suggested_by else ctx.author.id
 
             queue.append(
                 {
                     "artist": artist_name,
                     "title": album_name,
+                    "url": album_url,
                     "image": img,
                     "user_name": user_name,
                     "user_id": user_id,
@@ -112,12 +142,18 @@ def register_commands(bot):
         embed = discord.Embed(
             title="Upcoming Album Queue",
             description=f"There are **{len(queue)}** albums waiting.",
-            color=0xE74C3C,  # lightish red
+            color=0x3498DB,
         )
-        for i, item in enumerate(queue[:10], 1):
+        for i, item in enumerate(queue[:5], 1):
+            user_id = item.get("user_id")
+            submitter = f"<@{user_id}>" if user_id else item.get("user_name", "Unknown")
             embed.add_field(
-                name=f"{i}. {item['title']}",
-                value=f"Artist: {item['artist']}\nSubmitted by: {item['user_name']}",
+                name=f"{i}.",
+                value=(
+                    f"{_album_title_link(item)}\n"
+                    f"Artist: {_artist_name(item.get('artist'))}\n"
+                    f"Submitted by: {submitter}"
+                ),
                 inline=False,
             )
 
@@ -134,11 +170,15 @@ def register_commands(bot):
         if not queue:
             return await ctx.send("❌ Queue is empty.")
         if index > len(queue):
-            return await ctx.send(f"❌ Index out of range. There are {len(queue)} items.")
+            return await ctx.send(
+                f"❌ Index out of range. There are {len(queue)} items."
+            )
 
         removed = queue.pop(index - 1)
         bot.save_queues()
-        await ctx.send(f"✅ Removed **{removed.get('artist')} - {removed.get('title')}** from queue.")
+        await ctx.send(
+            f"✅ Removed **{removed.get('artist')} - {removed.get('title')}** from queue."
+        )
 
     # Manually pop queue (bot owner only)
     async def pop_queue(ctx, queue):

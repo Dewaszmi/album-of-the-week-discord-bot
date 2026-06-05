@@ -219,5 +219,5 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-quotes.txt
+# Where the queue is stored
 data/
