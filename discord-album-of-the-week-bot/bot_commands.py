@@ -1,8 +1,9 @@
-import asyncio
 from urllib.parse import quote
 
 import discord
 from discord.ext import commands
+
+from bot import is_lastfm_album_url
 
 
 def _artist_name(artist):
@@ -48,8 +49,8 @@ def register_commands(bot):
     async def aotw_help(ctx):
         embed = discord.Embed(title="AOTW Commands", color=0x3498DB)
         embed.add_field(
-            name="!aotw <queue> add <query> [@user]",
-            value="Search Last.fm and add an album to the selected queue. Optionally mention another user as the suggester.",
+            name="!aotw <queue> add <query|last.fm URL> [@user]",
+            value="Search Last.fm or pass a Last.fm album URL to add an album to the selected queue. Optionally mention another user as the suggester.",
             inline=False,
         )
         embed.add_field(
@@ -89,7 +90,10 @@ def register_commands(bot):
             return await ctx.send("❌ Please provide an album to add.")
 
         async with ctx.typing():
-            data = await bot.fetch_fuzzy_album(raw)
+            if is_lastfm_album_url(raw):
+                data = await bot.fetch_album_from_url(raw)
+            else:
+                data = await bot.fetch_fuzzy_album(raw)
 
             if not data:
                 return await ctx.send("❌ Not found.")

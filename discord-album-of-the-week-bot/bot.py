@@ -1,9 +1,11 @@
 import datetime
 import json
 import os
+from urllib.parse import unquote
 
 import aiohttp
 import discord
+import yaml
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
@@ -17,11 +19,49 @@ AOTW_ROLE_ID = os.getenv("AOTW_ROLE_ID")
 intents = discord.Intents.default()
 intents.message_content = True
 
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CONFIG_FILE = os.path.join(ROOT_DIR, "config.yaml")
 DATA_DIR = "data"
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 QUEUE_FILE = f"{DATA_DIR}/queue.json"
 QUOTES_FILE = f"{DATA_DIR}/quotes.json"
+
+LASTFM_ALBUM_URL_PREFIXES = (
+    "https://www.last.fm/music/",
+    "http://www.last.fm/music/",
+    "https://last.fm/music/",
+    "http://last.fm/music/",
+)
+
+DEFAULT_CONFIG = {
+    "normal": {"weekday": 2, "post_hour": 12, "post_minute": 0},
+    "bonus": {"weekday": 5, "post_hour": 12, "post_minute": 0},
+}
+
+
+def is_lastfm_album_url(text: str) -> bool:
+    return any(text.startswith(prefix) for prefix in LASTFM_ALBUM_URL_PREFIXES)
+
+
+def parse_lastfm_album_url(url: str):
+    prefix = next((p for p in LASTFM_ALBUM_URL_PREFIXES if url.startswith(p)), None)
+    if not prefix:
+        return None
+
+    path = url[len(prefix) :].split("?")[0].rstrip("/")
+    if "/+/" in path:
+        artist_part, album_part = path.split("/+/", 1)
+    else:
+        slash_idx = path.find("/")
+        if slash_idx == -1:
+            return None
+        artist_part = path[:slash_idx]
+        album_part = path[slash_idx + 1 :]
+
+    artist = unquote(artist_part.replace("+", " "))
+    album = unquote(album_part.replace("+", " "))
+    return artist, album
 
 
 class AlbumBot(commands.Bot):
@@ -30,6 +70,23 @@ class AlbumBot(commands.Bot):
         data = self.load_data(QUEUE_FILE, {"main": [], "bonus": []})
         self.main_queue = data.get("main", [])
         self.bonus_queue = data.get("bonus", [])
+        self.config = self.load_config()
+
+    def load_config(self):
+        if os.path.exists(CONFIG_FILE):
+            try:
+                if os.path.getsize(CONFIG_FILE) == 0:
+                    return DEFAULT_CONFIG
+
+                with open(CONFIG_FILE, "r") as f:
+                    data = yaml.safe_load(f)
+                    return data if data else DEFAULT_CONFIG
+            except (yaml.YAMLError, IOError) as e:
+                print(
+                    f"⚠️ Warning: Could not parse {CONFIG_FILE}. Resetting to default. Error: {e}"
+                )
+                return DEFAULT_CONFIG
+        return DEFAULT_CONFIG
 
     def load_data(self, filename, default_val={}):
         if os.path.exists(filename):
@@ -40,7 +97,9 @@ class AlbumBot(commands.Bot):
                 with open(filename, "r") as f:
                     return json.load(f)
             except (json.JSONDecodeError, IOError) as e:
-                print(f"⚠️ Warning: Could not parse {filename}. Resetting to default. Error: {e}")
+                print(
+                    f"⚠️ Warning: Could not parse {filename}. Resetting to default. Error: {e}"
+                )
                 return default_val
         return default_val
 
@@ -69,8 +128,25 @@ class AlbumBot(commands.Bot):
                 count += 1
         return count
 
+    def _queue_schedule(self, queue_name):
+        queue_config = self.config.get(queue_name, DEFAULT_CONFIG[queue_name])
+        return (
+            queue_config.get("weekday", DEFAULT_CONFIG[queue_name]["weekday"]),
+            queue_config.get("post_hour", DEFAULT_CONFIG[queue_name]["post_hour"]),
+            queue_config.get("post_minute", DEFAULT_CONFIG[queue_name]["post_minute"]),
+        )
+
     async def setup_hook(self):
-        self.weekly_post.start()
+        _, normal_hour, normal_minute = self._queue_schedule("normal")
+        _, bonus_hour, bonus_minute = self._queue_schedule("bonus")
+        self.normal_weekly_post.change_interval(
+            time=datetime.time(hour=normal_hour, minute=normal_minute)
+        )
+        self.bonus_weekly_post.change_interval(
+            time=datetime.time(hour=bonus_hour, minute=bonus_minute)
+        )
+        self.normal_weekly_post.start()
+        self.bonus_weekly_post.start()
 
     async def on_ready(self):
         # Print online status and which guild/role/channel the bot will use
@@ -99,6 +175,29 @@ class AlbumBot(commands.Bot):
             f"{self.user} is online. Connected to guild: {guild_name}; Ping role: {role_display}; Target channel: {channel_name}"
         )
 
+    async def _fetch_album_info(self, session, artist_name, album_name):
+        search_url = "http://ws.audioscrobbler.com/2.0/"
+        info_params = {
+            "method": "album.getInfo",
+            "api_key": LASTFM_API_KEY,
+            "artist": artist_name,
+            "album": album_name,
+            "format": "json",
+        }
+        async with session.get(search_url, params=info_params) as resp:
+            full_data = await resp.json()
+            return full_data.get("album")
+
+    async def fetch_album_from_url(self, url):
+        """Fetches album info directly from a Last.fm album URL."""
+        parsed = parse_lastfm_album_url(url)
+        if not parsed:
+            return None
+
+        artist_name, album_name = parsed
+        async with aiohttp.ClientSession() as session:
+            return await self._fetch_album_info(session, artist_name, album_name)
+
     async def fetch_fuzzy_album(self, query):
         """Searches Last.fm for the best match and returns full album info."""
         search_url = "http://ws.audioscrobbler.com/2.0/"
@@ -111,43 +210,31 @@ class AlbumBot(commands.Bot):
         }
 
         async with aiohttp.ClientSession() as session:
-            # Search last.fm for the album
             async with session.get(search_url, params=search_params) as resp:
                 data = await resp.json()
-                results = data.get("results", {}).get("albummatches", {}).get("album", [])
+                results = (
+                    data.get("results", {}).get("albummatches", {}).get("album", [])
+                )
 
                 if not results:
                     return None
 
-                # 1. FIND THE BEST CANDIDATE (First one with an image)
                 artist_name = None
                 album_name = None
 
                 for match in results:
                     images = match.get("image", [])
-                    # Check if at least one image entry has a URL
                     if any(img.get("#text") for img in images):
                         artist_name = match["artist"]
                         album_name = match["name"]
                         break
 
-                # Fallback: if NONE have images, just take the first result anyway
                 if not artist_name:
                     artist_name = results[0]["artist"]
                     album_name = results[0]["name"]
 
-            # Get full info (including high-res images) for that specific match
-            info_params = {
-                "method": "album.getInfo",
-                "api_key": LASTFM_API_KEY,
-                "artist": artist_name,
-                "album": album_name,
-                "format": "json",
-            }
-            async with session.get(search_url, params=info_params) as resp:
-                full_data = await resp.json()
-                album_data = full_data.get("album")
-                return album_data if album_data else results[0]
+            album_data = await self._fetch_album_info(session, artist_name, album_name)
+            return album_data if album_data else results[0]
 
     async def post_album(self, queue):
         if not queue:
@@ -192,10 +279,22 @@ class AlbumBot(commands.Bot):
             return entry["title"]
         return "Channel not found."
 
-    @tasks.loop(time=datetime.time(hour=12, minute=0))
-    async def weekly_post(self):
-        current_day = datetime.datetime.now().weekday()
-        if current_day == 2:  # Wednesday
+    @tasks.loop()
+    async def normal_weekly_post(self):
+        weekday, _, _ = self._queue_schedule("normal")
+        if datetime.datetime.now().weekday() == weekday:
             await self.post_album(queue=self.main_queue)
-        elif current_day == 5:  # Saturday
+
+    @tasks.loop()
+    async def bonus_weekly_post(self):
+        weekday, _, _ = self._queue_schedule("bonus")
+        if datetime.datetime.now().weekday() == weekday:
             await self.post_album(queue=self.bonus_queue)
+
+    @normal_weekly_post.before_loop
+    async def _before_normal_weekly_post(self):
+        await self.wait_until_ready()
+
+    @bonus_weekly_post.before_loop
+    async def _before_bonus_weekly_post(self):
+        await self.wait_until_ready()

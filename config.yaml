@@ -1,0 +1,10 @@
+# Weekdays for posting events of each queue
+# Numbering starts from Monday at 0 (0 - Monday, 6 - Sunday)
+normal: # Wednesday (2) at 12:00 by default
+  weekday: 2
+  post_hour: 12
+  post_minute: 0
+bonus: # Saturday (5) at 12:00 by default
+  weekday: 5
+  post_hour: 12
+  post_minute: 0

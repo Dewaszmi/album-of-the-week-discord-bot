@@ -3,7 +3,7 @@ import sys
 from dotenv import load_dotenv
 
 HERE = os.path.dirname(__file__)
-MODULE_PATH = os.path.join(HERE, "album-of-the-week-discord-bot")
+MODULE_PATH = os.path.join(HERE, "discord-album-of-the-week-bot")
 if MODULE_PATH not in sys.path:
     sys.path.insert(0, MODULE_PATH)
 
