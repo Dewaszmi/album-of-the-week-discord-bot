@@ -1,3 +1,4 @@
+import re
 from urllib.parse import quote
 
 import discord
@@ -20,6 +21,26 @@ def _album_lastfm_url(item):
     if artist and album:
         return f"https://www.last.fm/music/{quote(artist, safe='')}/+/{quote(album, safe='')}"
     return None
+
+
+_SNOWFLAKE_RE = re.compile(r"\s(\d{17,20})$")
+
+
+def _parse_suggested_user_id(raw: str) -> tuple[str, int | None]:
+    match = _SNOWFLAKE_RE.search(raw)
+    if not match:
+        return raw, None
+    return raw[: match.start()].strip(), int(match.group(1))
+
+
+async def _resolve_user_name(bot, guild, user_id: int) -> str:
+    if guild and (member := guild.get_member(user_id)):
+        return member.display_name
+    try:
+        user = await bot.fetch_user(user_id)
+        return user.display_name
+    except (discord.NotFound, discord.HTTPException):
+        return str(user_id)
 
 
 def _album_title_link(item):
@@ -49,8 +70,8 @@ def register_commands(bot):
     async def aotw_help(ctx):
         embed = discord.Embed(title="AOTW Commands", color=0x3498DB)
         embed.add_field(
-            name="!aotw <queue> add <query|last.fm URL> [@user]",
-            value="Search Last.fm or pass a Last.fm album URL to add an album to the selected queue. Optionally mention another user as the suggester.",
+            name="!aotw <queue> add <query|last.fm URL> [user_id]",
+            value="Search Last.fm or pass a Last.fm album URL to add an album to the selected queue. Optionally append another user's Discord ID as the suggester.",
             inline=False,
         )
         embed.add_field(
@@ -77,14 +98,7 @@ def register_commands(bot):
 
     # Add album to queue (interactive search + selection)
     async def add_album(ctx, queue, args: str):
-        # Parse suggested_by from mentions inside the add_album function
-        suggested_by = None
-        raw = args.strip() if args else ""
-        if ctx.message.mentions:
-            suggested_by = ctx.message.mentions[0]
-            for m in ctx.message.mentions:
-                raw = raw.replace(m.mention, "")
-            raw = raw.strip()
+        raw, suggested_user_id = _parse_suggested_user_id(args.strip() if args else "")
 
         if not raw:
             return await ctx.send("❌ Please provide an album to add.")
@@ -110,11 +124,14 @@ def register_commands(bot):
                     img = image["#text"]
                     break
 
-            # Use suggested_by if provided, otherwise default to command author
-            user_name = (
-                suggested_by.display_name if suggested_by else ctx.author.display_name
-            )
-            user_id = suggested_by.id if suggested_by else ctx.author.id
+            if suggested_user_id is not None:
+                user_id = suggested_user_id
+                user_name = await _resolve_user_name(
+                    bot, ctx.guild, suggested_user_id
+                )
+            else:
+                user_id = ctx.author.id
+                user_name = ctx.author.display_name
 
             queue.append(
                 {

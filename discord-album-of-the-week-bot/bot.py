@@ -128,6 +128,23 @@ class AlbumBot(commands.Bot):
                 count += 1
         return count
 
+    def _post_allowed_mentions(self, entry):
+        roles = []
+        if AOTW_ROLE_ID:
+            try:
+                roles.append(discord.Object(id=int(AOTW_ROLE_ID)))
+            except (TypeError, ValueError):
+                pass
+
+        user_id = entry.get("user_id")
+        users = [discord.Object(id=int(user_id))] if user_id else False
+
+        return discord.AllowedMentions(
+            roles=roles or False,
+            users=users,
+            everyone=False,
+        )
+
     def _queue_schedule(self, queue_name):
         queue_config = self.config.get(queue_name, DEFAULT_CONFIG[queue_name])
         return (
@@ -267,14 +284,22 @@ class AlbumBot(commands.Bot):
                 f"{entry['artist']} - {entry['title']}\n"
                 f"PROPOZYCJA: {user_mention}\n"
             )
+            allowed_mentions = self._post_allowed_mentions(entry)
 
             # Send the message; include image in an embed if available
             if image_url:
                 embed = discord.Embed()
                 embed.set_image(url=image_url)
-                await thread.send(content=message_content, embed=embed)
+                await thread.send(
+                    content=message_content,
+                    embed=embed,
+                    allowed_mentions=allowed_mentions,
+                )
             else:
-                await thread.send(content=message_content)
+                await thread.send(
+                    content=message_content,
+                    allowed_mentions=allowed_mentions,
+                )
 
             return entry["title"]
         return "Channel not found."
