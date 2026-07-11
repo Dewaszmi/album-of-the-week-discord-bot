@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AOTW Queue Manager</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div id="login-screen" class="login-screen hidden">
+    <div class="login-card">
+      <h1>AOTW Queue Manager</h1>
+      <p>Enter the admin token to continue.</p>
+      <input type="password" id="token-input" placeholder="Admin token" autocomplete="current-password">
+      <button id="login-btn">Connect</button>
+      <p id="login-error" class="error hidden"></p>
+    </div>
+  </div>
+
+  <div id="app" class="app hidden">
+    <header class="header">
+      <h1>Album of the Week</h1>
+      <div class="header-actions">
+        <button id="refresh-btn" class="btn-secondary">Refresh</button>
+        <button id="logout-btn" class="btn-secondary">Logout</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="queues">
+        <div class="add-panel">
+          <div class="panel-header">
+            <h2>Add Album</h2>
+          </div>
+          <p class="hint">Search Last.fm by album name, or paste a Last.fm album URL.</p>
+          <form id="search-form" class="search-form">
+            <input type="text" id="search-query" placeholder="e.g. OK Computer or last.fm URL" required>
+            <select id="add-queue">
+              <option value="main">Normal queue</option>
+              <option value="bonus">Bonus queue</option>
+            </select>
+            <input type="text" id="suggester-name" placeholder="Suggested by (optional)">
+            <button type="submit" class="btn-primary" id="search-btn">Search</button>
+          </form>
+          <p id="search-status" class="search-status hidden"></p>
+          <ul id="search-results" class="search-results"></ul>
+        </div>
+
+        <div class="queue-panel" data-queue="main">
+          <div class="panel-header">
+            <h2>Normal Queue</h2>
+            <span class="badge" id="main-count">0</span>
+          </div>
+          <p class="hint">Drag to reorder. Next up is at the top.</p>
+          <ul class="album-list" id="main-list"></ul>
+          <p class="empty-msg hidden" id="main-empty">Queue is empty.</p>
+        </div>
+
+        <div class="queue-panel" data-queue="bonus">
+          <div class="panel-header">
+            <h2>Bonus Queue</h2>
+            <span class="badge" id="bonus-count">0</span>
+          </div>
+          <p class="hint">Drag to reorder. Next up is at the top.</p>
+          <ul class="album-list" id="bonus-list"></ul>
+          <p class="empty-msg hidden" id="bonus-empty">Queue is empty.</p>
+        </div>
+      </section>
+
+      <aside class="backlog">
+        <div class="panel-header">
+          <h2>Backlog</h2>
+          <span class="badge" id="backlog-count">0</span>
+        </div>
+        <p class="hint">Notes for future album ideas.</p>
+        <form id="backlog-form" class="backlog-form">
+          <textarea id="backlog-input" rows="3" placeholder="e.g. Radiohead - OK Computer"></textarea>
+          <input type="text" id="backlog-author" placeholder="Your name (optional)">
+          <button type="submit" class="btn-primary">Add note</button>
+        </form>
+        <ul class="backlog-list" id="backlog-list"></ul>
+        <p class="empty-msg hidden" id="backlog-empty">No backlog notes yet.</p>
+      </aside>
+    </main>
+
+    <div id="toast" class="toast hidden"></div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

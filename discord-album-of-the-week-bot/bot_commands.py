@@ -228,5 +228,5 @@ def register_commands(bot):
         async def _pop(ctx):
             await pop_queue(ctx, queue)
 
-    register_queue_commands(normal, bot.main_queue)
-    register_queue_commands(bonus, bot.bonus_queue)
+    register_queue_commands(normal, bot.store.main)
+    register_queue_commands(bonus, bot.store.bonus)
