@@ -1,0 +1,12 @@
+[project]
+name = "discord-album-of-the-week-bot"
+version = "0.1.0"
+description = "Discord bot for automatic album-of-the-week events."
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+	"aiohttp",
+	"discord",
+	"dotenv",
+	"PyYAML",
+]
