@@ -9,7 +9,7 @@ import yaml
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
-from album_service import album_data_to_preview, artist_name
+from album_service import album_data_to_preview, artist_name, extract_cover_image
 from queue_store import QueueStore
 from web_server import start_web_server
 
@@ -28,11 +28,10 @@ intents.message_content = True
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_FILE = os.path.join(ROOT_DIR, "config.yaml")
-DATA_DIR = "data"
-if not os.path.exists(DATA_DIR):
-    os.makedirs(DATA_DIR)
-QUEUE_FILE = f"{DATA_DIR}/queue.json"
-QUOTES_FILE = f"{DATA_DIR}/quotes.json"
+DATA_DIR = os.path.join(ROOT_DIR, "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+QUEUE_FILE = os.path.join(DATA_DIR, "queue.json")
+QUOTES_FILE = os.path.join(DATA_DIR, "quotes.json")
 
 LASTFM_ALBUM_URL_PREFIXES = (
     "https://www.last.fm/music/",
@@ -72,10 +71,11 @@ def parse_lastfm_album_url(url: str):
 
 
 class AlbumBot(commands.Bot):
-    def __init__(self):
+    def __init__(self, enable_web_ui=False):
         super().__init__(command_prefix="!", intents=intents)
         self.store = QueueStore(QUEUE_FILE)
         self.config = self.load_config()
+        self.enable_web_ui = enable_web_ui
 
     @property
     def main_queue(self):
@@ -166,9 +166,8 @@ class AlbumBot(commands.Bot):
         )
 
     async def setup_hook(self):
-        await start_web_server(
-            self, WEB_UI_HOST, WEB_UI_PORT, ADMIN_TOKEN
-        )
+        if self.enable_web_ui:
+            await start_web_server(self, WEB_UI_HOST, WEB_UI_PORT, ADMIN_TOKEN)
         _, normal_hour, normal_minute = self._queue_schedule("normal")
         _, bonus_hour, bonus_minute = self._queue_schedule("bonus")
         self.normal_weekly_post.change_interval(
@@ -300,26 +299,15 @@ class AlbumBot(commands.Bot):
                     return []
                 if isinstance(results, dict):
                     results = [results]
-
-            previews = []
-            for match in results[:limit]:
-                match_artist = artist_name(match.get("artist"))
-                match_album = match.get("name", "")
-                album_data = await self._fetch_album_info(
-                    session, match_artist, match_album
-                )
-                if album_data:
-                    previews.append(album_data_to_preview(album_data))
-                else:
-                    previews.append(
-                        {
-                            "artist": match_artist,
-                            "title": match_album,
-                            "url": match.get("url", ""),
-                            "image": "",
-                        }
-                    )
-            return previews
+                return [
+                    {
+                        "artist": artist_name(m.get("artist")),
+                        "title": m.get("name", ""),
+                        "url": m.get("url", ""),
+                        "image": extract_cover_image(m.get("image")),
+                    }
+                    for m in results[:limit]
+                ]
 
     async def post_album(self, queue):
         if not queue:
